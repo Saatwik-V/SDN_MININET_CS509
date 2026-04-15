@@ -69,15 +69,21 @@ self.addLink(s1, s2)
 
 ---
 
-### 🔹 2. topo_detect.py (POX Controller)
+### 🔹 2. topo_detect.py (POX Controller with Custom SDN Logic)
 
-Custom controller to detect topology changes.
+**Dual functionality controller:**
 
-#### Features:
+1. **Topology Detection** (existing):
+   - Tracks active switches
+   - Tracks active links
+   - Logs topology state dynamically
 
-* Tracks switches
-* Tracks links
-* Logs topology updates dynamically
+2. **Custom SDN Logic** (NEW):
+   - Implements MAC-based learning switch
+   - Installs flow rules with match-action logic
+   - Provides MAC-based firewall capability
+   
+**Key difference:** We do NOT use POX's `forwarding.l2_learning` module. Instead, all learning switch and flow rule logic is implemented from scratch in Python using OpenFlow events.
 
 ---
 
@@ -139,18 +145,69 @@ When a packet arrives at the switch:
 
 ---
 
+### 🔸 Custom SDN Implementation (topo_detect.py)
+
+**Instead of relying on POX's forwarding.l2_learning, we implement our own learning switch with two features:**
+
+#### Feature 1: MAC-based Learning Switch
+
+**How it works:**
+
+1. **Packet arrives at switch → packet_in sent to controller**
+
+2. **Controller learns source MAC:**
+   ```
+   mac_to_port[src_mac] = (switch_dpid, port)
+   ```
+
+3. **Controller checks destination MAC:**
+   - **If known:** Install flow rule → future packets use switch forwarding
+   - **If unknown:** Flood packet → switch broadcasts to discover location
+
+4. **Flow Rule installed with optimizations:**
+   ```
+   Match: dl_src=<src_mac>, dl_dst=<dst_mac>
+   Action: output=<port>
+   Priority: 100
+   Idle Timeout: 10s (remove if unused)
+   Hard Timeout: 60s (absolute maximum)
+   ```
+
+👉 Reduces controller load after initial discovery phase
+
+#### Feature 2: MAC-based Firewall
+
+**Optional blocking capability:**
+
+```python
+blocked_macs = set()  # Add MAC addresses to block
+```
+
+**Firewall logic:**
+- If packet destination is in `blocked_macs` → **drop packet immediately**
+- No flood, no forwarding
+- Can be extended via controller interface
+
+**Example use cases:**
+- Block specific hosts from communicating
+- Implement access control policies
+- Prevent unauthorized traffic
+
+---
+
 ## ⚙️ Detailed Execution Steps
 
 ### Step 1: Start POX Controller
 
 ```bash
 cd ~/pox
-./pox.py log.level --DEBUG openflow.discovery openflow.spanning_tree forwarding.l2_learning topo_detect
+./pox.py log.level --DEBUG openflow.discovery openflow.spanning_tree topo_detect
 ```
 
 **Expected Output:**
 - Controller starts and listens on default port 6633
 - Logs show ready status for switch connections
+- Message: "Controller initialized with: [1] Topology Detection... [2] Custom SDN Logic..."
 
 ---
 
